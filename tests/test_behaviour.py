@@ -1,68 +1,48 @@
 import asyncio
 import datetime
-import time
 from threading import Event
 
 import aioxmpp
 import pytest
-from pytest import fixture
-from asynctest import CoroutineMock, MagicMock
+from asynctest import CoroutineMock, MagicMock, Mock
 
+from spade.agent import Agent
 from spade.behaviour import OneShotBehaviour, CyclicBehaviour, PeriodicBehaviour, TimeoutBehaviour, FSMBehaviour, State, \
     NotValidState, NotValidTransition, BehaviourNotFinishedException
 from spade.message import Message, SPADE_X_METADATA
 from spade.template import Template
-from tests.utils import make_connected_agent
+from .conftest import wait_for_behaviour_is_killed
+from .factories import MockedAgentFactory
 
 STATE_ONE = "STATE_ONE"
 STATE_TWO = "STATE_TWO"
 STATE_THREE = "STATE_THREE"
 
 
-def wait_for_behaviour_is_killed(behaviour, tries=500, sleep=0.01):
-    counter = 0
-    while not behaviour.is_killed() and counter < tries:
-        time.sleep(sleep)
-        counter += 1
-    if not behaviour.is_killed():
-        raise Exception("Behaviour not finished")
+class StateOne(State):
+    async def run(self):
+        self.agent.state = STATE_ONE
+        self.set_next_state(STATE_TWO)
+        self.kill()
+        await self.agent.sync1_behaviour.wait()
 
 
-@fixture
-def message():
-    return Message(
-        to="to@localhost",
-        sender="sender@localhost",
-        body="message body",
-        thread="thread-id",
-        metadata={
-            "metadata1": "value1",
-            "metadata2": "value2"
-        }
-    )
+class StateTwo(State):
+    async def run(self):
+        self.agent.state = STATE_TWO
+        self.set_next_state(STATE_THREE)
+        self.kill()
+        await self.agent.sync2_behaviour.wait()
 
 
-@fixture
+class StateThree(State):
+    async def run(self):
+        self.agent.state = STATE_THREE
+        self.kill()
+
+
+@pytest.fixture
 def fsm():
-    class StateOne(State):
-        async def run(self):
-            self.agent.state = STATE_ONE
-            self.set_next_state(STATE_TWO)
-            self.kill()
-            await self.agent.sync1_behaviour.wait()
-
-    class StateTwo(State):
-        async def run(self):
-            self.agent.state = STATE_TWO
-            self.set_next_state(STATE_THREE)
-            self.kill()
-            await self.agent.sync2_behaviour.wait()
-
-    class StateThree(State):
-        async def run(self):
-            self.agent.state = STATE_THREE
-            self.kill()
-
     fsm_ = FSMBehaviour()
     state_one = StateOne()
     state_two = StateTwo()
@@ -92,7 +72,7 @@ def test_on_start_on_end():
             self.agent.on_end_flag = True
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.on_start_flag = False
     agent.on_end_flag = False
     behaviour = TestOneShotBehaviour()
@@ -103,7 +83,7 @@ def test_on_start_on_end():
 
     agent.start(auto_register=False)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.on_start_flag is True
     assert agent.on_end_flag is True
@@ -119,14 +99,14 @@ def test_on_start_exception():
         async def run(self):
             pass
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.flag = False
     behaviour = TestOneShotBehaviour()
     agent.add_behaviour(behaviour)
 
     agent.start(auto_register=False)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert type(behaviour.exit_code) == ZeroDivisionError
     assert not agent.flag
@@ -139,14 +119,14 @@ def test_on_run_exception():
             result = 1 / 0
             self.agent.flag = True
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.flag = False
     behaviour = TestOneShotBehaviour()
     agent.add_behaviour(behaviour)
 
     agent.start(auto_register=False)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert type(behaviour.exit_code) == ZeroDivisionError
     assert not agent.flag
@@ -162,14 +142,14 @@ def test_on_end_exception():
             result = 1 / 0
             self.agent.flag = True
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.flag = False
     behaviour = TestOneShotBehaviour()
     agent.add_behaviour(behaviour)
 
     agent.start(auto_register=False)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert type(behaviour.exit_code) == ZeroDivisionError
     assert not agent.flag
@@ -181,7 +161,7 @@ def test_add_behaviour():
         async def run(self):
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     behaviour = EmptyOneShotBehaviour()
     agent.add_behaviour(behaviour)
 
@@ -195,9 +175,9 @@ def test_add_behaviour():
     assert behaviour.web == agent.web
     assert behaviour.queue.empty()
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
-    assert behaviour.done()
+    assert behaviour.is_done()
     agent.stop()
 
 
@@ -206,7 +186,7 @@ def test_remove_behaviour():
         async def run(self):
             pass
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     behaviour = EmptyBehaviour()
     agent.add_behaviour(behaviour)
     assert agent.has_behaviour(behaviour)
@@ -221,7 +201,7 @@ def test_remove_behaviour_not_added():
         async def run(self):
             pass
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     behaviour = EmptyBehaviour()
 
     with pytest.raises(ValueError):
@@ -237,13 +217,13 @@ def test_wait_for_agent_start():
         async def run(self):
             pass
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     behaviour = EmptyOneShotBehaviour()
     agent.add_behaviour(behaviour)
 
     agent.start(auto_register=False)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.started
 
@@ -298,15 +278,16 @@ def test_send_message(message):
             await self.send(message)
             self.kill()
 
-    agent = make_connected_agent(use_container=False)
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
-    agent.aiothread.client = MagicMock()
+    agent.client = MagicMock()
     agent.client.send = CoroutineMock()
     behaviour = SendBehaviour()
     agent.add_behaviour(behaviour)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.client.send.await_count == 1
     msg_arg = agent.client.send.await_args[0][0]
@@ -331,15 +312,16 @@ def test_send_message_without_sender():
             await self.send(msg)
             self.kill()
 
-    agent = make_connected_agent(use_container=False)
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
-    agent.aiothread.client = MagicMock()
+    agent.client = MagicMock()
     agent.client.send = CoroutineMock()
     behaviour = SendBehaviour()
     agent.add_behaviour(behaviour)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     msg_arg = agent.client.send.await_args[0][0]
     assert msg_arg.from_ == aioxmpp.JID.fromstr("fake@jid")
@@ -355,17 +337,18 @@ def test_receive():
             self.agent.recv_msg = await self.receive()
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
 
     behaviour = RecvBehaviour()
     agent.add_behaviour(behaviour)
     assert behaviour.mailbox_size() == 0
 
-    agent.start(auto_register=False)
+    future = agent.start(auto_register=False)
+    future.result()
     assert agent.is_alive()
     assert agent.has_behaviour(behaviour)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.recv_msg.body == "received body"
 
@@ -378,7 +361,7 @@ def test_receive_with_timeout():
             self.agent.recv_msg = await self.receive(5.0)
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
 
     msg = Message(body="received body")
     template = Template(body="received body")
@@ -386,12 +369,13 @@ def test_receive_with_timeout():
     agent.add_behaviour(behaviour, template)
     assert behaviour.mailbox_size() == 0
 
-    agent.start(auto_register=False)
+    future = agent.start(auto_register=False)
+    future.result()
     agent._message_received(msg.prepare())
     assert agent.is_alive()
     assert agent.has_behaviour(behaviour)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.recv_msg.body == "received body"
     assert agent.recv_msg == msg
@@ -405,14 +389,15 @@ def test_receive_with_timeout_error():
             self.agent.recv_msg = await self.receive(0.01)
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
 
     template = Template(body="received body")
     behaviour = RecvBehaviour()
     agent.add_behaviour(behaviour, template)
 
-    agent.start(auto_register=False)
-    wait_for_behaviour_is_killed(behaviour)
+    future = agent.start(auto_register=False)
+    future.result()
+    behaviour.join()
 
     assert behaviour.mailbox_size() == 0
     assert agent.recv_msg is None
@@ -425,14 +410,15 @@ def test_receive_with_empty_queue():
             self.agent.recv_msg = await self.receive()
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
 
     template = Template(body="received body")
     behaviour = RecvBehaviour()
     agent.add_behaviour(behaviour, template)
 
-    agent.start(auto_register=False)
-    wait_for_behaviour_is_killed(behaviour)
+    future = agent.start(auto_register=False)
+    future.result()
+    behaviour.join()
 
     assert behaviour.mailbox_size() == 0
     assert agent.recv_msg is None
@@ -446,12 +432,13 @@ def test_set_get():
             assert self.get("key") == "value"
             self.kill()
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     behaviour = SendBehaviour()
     agent.add_behaviour(behaviour)
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.get("key") == "value"
 
@@ -472,7 +459,7 @@ def test_multiple_templates():
             self.agent.msg3 = await self.receive(timeout=2)
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
 
     template1 = Template()
     template1.set_metadata("performative", "template1")
@@ -491,12 +478,13 @@ def test_multiple_templates():
     msg2 = Message(metadata={"performative": "template2"}).prepare()
     msg3 = Message(metadata={"performative": "template3"}).prepare()
 
-    agent.start(auto_register=False)
+    future = agent.start(auto_register=False)
+    future.result()
     agent._message_received(msg1)
     agent._message_received(msg2)
     agent._message_received(msg3)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.msg1.get_metadata("performative") == "template1"
     assert agent.msg2.get_metadata("performative") == "template2"
@@ -509,12 +497,12 @@ def test_kill_behaviour():
         async def run(self):
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     behaviour = TestCyclicBehaviour()
     agent.start(auto_register=False)
 
     agent.add_behaviour(behaviour)
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert behaviour.is_killed()
     assert behaviour.exit_code == 0
@@ -527,12 +515,13 @@ def test_exit_code_from_kill_behaviour():
         async def run(self):
             self.kill(42)
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     behaviour = TestCyclicBehaviour()
-    agent.start(auto_register=False)
+    future = agent.start(auto_register=False)
+    future.result()
 
     agent.add_behaviour(behaviour)
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert behaviour.is_killed()
     assert behaviour.exit_code == 42
@@ -547,10 +536,11 @@ def test_set_exit_code_behaviour():
             agent.event.wait()
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     behaviour = TestCyclicBehaviour()
     agent.event = Event()
-    agent.start(auto_register=False)
+    future = agent.start(auto_register=False)
+    future.result()
 
     agent.add_behaviour(behaviour)
 
@@ -558,9 +548,10 @@ def test_set_exit_code_behaviour():
         assert behaviour.exit_code
 
     agent.event.set()
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
-    agent.stop()
+    future = agent.stop()
+    future.result()
 
     assert behaviour.exit_code == 1024
 
@@ -572,10 +563,11 @@ def test_notfinishedexception_behaviour():
         async def run(self):
             self.agent.event.wait()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.event = Event()
     behaviour = TestBehaviour()
-    agent.start(auto_register=False)
+    future = agent.start(auto_register=False)
+    future.result()
 
     agent.add_behaviour(behaviour)
 
@@ -586,7 +578,8 @@ def test_notfinishedexception_behaviour():
 
     assert behaviour.exit_code == 0
 
-    agent.stop()
+    future = agent.stop()
+    future.result()
 
     assert not agent.is_alive()
 
@@ -598,14 +591,16 @@ def test_cyclic_behaviour():
             if self.agent.cycles > 2:
                 self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.cycles = 0
     behaviour = TestCyclicBehaviour()
-    agent.start(auto_register=False)
+    future = agent.start(auto_register=False)
+    future.result()
+
     assert agent.cycles == 0
 
     agent.add_behaviour(behaviour)
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.cycles == 3
     assert behaviour.is_killed()
@@ -619,15 +614,16 @@ def test_oneshot_behaviour():
             self.agent.one_shot_behaviour_executed = True
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.one_shot_behaviour_executed = False
     behaviour = TestOneShotBehaviour()
     agent.add_behaviour(behaviour)
 
     assert agent.one_shot_behaviour_executed is False
 
-    agent.start(auto_register=False)
-    wait_for_behaviour_is_killed(behaviour)
+    future = agent.start(auto_register=False)
+    future.result()
+    behaviour.join()
 
     assert agent.one_shot_behaviour_executed is True
     agent.stop()
@@ -639,15 +635,16 @@ def test_periodic_behaviour():
             self.agent.periodic_behaviour_execution_counter += 1
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.periodic_behaviour_execution_counter = 0
     behaviour = TestPeriodicBehaviour(0.01)
     agent.add_behaviour(behaviour)
 
     assert agent.periodic_behaviour_execution_counter == 0
 
-    agent.start(auto_register=False)
-    wait_for_behaviour_is_killed(behaviour)
+    future = agent.start(auto_register=False)
+    future.result()
+    behaviour.join()
 
     assert agent.periodic_behaviour_execution_counter == 1
     agent.stop()
@@ -659,15 +656,16 @@ def test_periodic_behaviour_period_zero():
             self.agent.periodic_behaviour_execution_counter += 1
             self.kill()
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.periodic_behaviour_execution_counter = 0
     behaviour = TestPeriodicBehaviour(0)
     agent.add_behaviour(behaviour)
 
     assert agent.periodic_behaviour_execution_counter == 0
 
-    agent.start(auto_register=False)
-    wait_for_behaviour_is_killed(behaviour)
+    future = agent.start(auto_register=False)
+    future.result()
+    behaviour.join()
 
     assert agent.periodic_behaviour_execution_counter == 1
     agent.stop()
@@ -700,8 +698,9 @@ def test_periodic_start_at():
             self.agent.delay = datetime.datetime.now()
             self.kill()
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     start_at = datetime.datetime.now() + datetime.timedelta(seconds=0.01)
     behaviour = TestPeriodicBehaviour(period=0.01, start_at=start_at)
@@ -710,7 +709,7 @@ def test_periodic_start_at():
 
     agent.add_behaviour(behaviour)
 
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.delay >= start_at
 
@@ -723,8 +722,9 @@ def test_timeout_behaviour():
             self.agent.delay = datetime.datetime.now()
             self.kill()
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     start_at = datetime.datetime.now() + datetime.timedelta(seconds=0.01)
     behaviour = TestTimeoutBehaviour(start_at=start_at)
@@ -733,11 +733,11 @@ def test_timeout_behaviour():
     assert not behaviour._timeout_triggered
 
     agent.add_behaviour(behaviour)
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.delay >= start_at
     assert behaviour._timeout_triggered
-    assert behaviour.done()
+    assert behaviour.is_done()
 
     agent.stop()
 
@@ -748,8 +748,9 @@ def test_timeout_behaviour_zero():
             self.agent.delay = datetime.datetime.now()
             self.kill()
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     start_at = datetime.datetime.now() + datetime.timedelta(seconds=0)
     behaviour = TestTimeoutBehaviour(start_at=start_at)
@@ -759,38 +760,46 @@ def test_timeout_behaviour_zero():
     assert not behaviour._timeout_triggered
 
     agent.add_behaviour(behaviour)
-    wait_for_behaviour_is_killed(behaviour)
+    behaviour.join()
 
     assert agent.delay >= start_at
     assert behaviour._timeout_triggered
-    assert behaviour.done()
+    assert behaviour.is_done()
 
     agent.stop()
 
 
 def test_fsm_behaviour(fsm):
-    agent = make_connected_agent()
-    agent.sync1_behaviour = asyncio.Event()
-    agent.sync2_behaviour = asyncio.Event()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
+    agent.sync1_behaviour = asyncio.Event(loop=agent.loop)
+    agent.sync2_behaviour = asyncio.Event(loop=agent.loop)
+
+    agent.state = None
 
     assert len(fsm._transitions) == 2
     assert fsm.current_state == STATE_ONE
 
     agent.add_behaviour(fsm)
-    wait_for_behaviour_is_killed(fsm.state_one)
     assert fsm.current_state == STATE_ONE
+    assert not fsm.state_one.is_done()
+    wait_for_behaviour_is_killed(fsm.state_one)
     assert agent.state == STATE_ONE
     agent.loop.call_soon_threadsafe(agent.sync1_behaviour.set)
+    fsm.state_one.join()
 
-    wait_for_behaviour_is_killed(fsm.state_two)
     assert fsm.current_state == STATE_TWO
+    assert not fsm.state_two.is_done()
+    wait_for_behaviour_is_killed(fsm.state_two)
     assert agent.state == STATE_TWO
     agent.loop.call_soon_threadsafe(agent.sync2_behaviour.set)
+    fsm.state_two.join()
 
-    wait_for_behaviour_is_killed(fsm.state_three)
     assert fsm.current_state == STATE_THREE
+    wait_for_behaviour_is_killed(fsm.state_three)
     assert agent.state == STATE_THREE
+    fsm.state_three.join()
 
     agent.stop()
 
@@ -838,17 +847,17 @@ def test_fsm_bad_state():
     fsm_.add_state(STATE_TWO, state_two)
     fsm_.add_transition(STATE_ONE, STATE_TWO)
 
-    agent = make_connected_agent()
+    agent = MockedAgentFactory()
     agent.start(auto_register=False)
 
     assert fsm_.current_state == STATE_ONE
 
     agent.add_behaviour(fsm_)
 
-    wait_for_behaviour_is_killed(state_one)
+    state_one.join()
     assert fsm_.current_state == STATE_ONE
 
-    wait_for_behaviour_is_killed(fsm_)
+    fsm_.join()
     assert fsm_.is_killed()
 
     agent.stop()
@@ -882,17 +891,18 @@ def test_fsm_bad_transition():
     fsm_.add_transition(STATE_ONE, STATE_TWO)
     fsm_.add_transition(STATE_TWO, STATE_THREE)
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     assert fsm_.current_state == STATE_ONE
 
     agent.add_behaviour(fsm_)
 
-    wait_for_behaviour_is_killed(state_one)
+    state_one.join()
     assert fsm_.current_state == STATE_ONE
 
-    wait_for_behaviour_is_killed(fsm_)
+    fsm_.join()
     assert fsm_.is_killed()
 
     agent.stop()
@@ -933,12 +943,13 @@ def test_fsm_fail_on_start():
     state_one = StateOne()
     fsm_.add_state(STATE_ONE, state_one, initial=True)
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     agent.add_behaviour(fsm_)
 
-    wait_for_behaviour_is_killed(fsm_)
+    fsm_.join()
 
     assert fsm_.is_killed()
 
@@ -956,12 +967,13 @@ def test_fsm_fail_on_run():
     state_one = StateOne()
     fsm_.add_state(STATE_ONE, state_one, initial=True)
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     agent.add_behaviour(fsm_)
 
-    wait_for_behaviour_is_killed(fsm_)
+    fsm_.join()
 
     assert fsm_.is_killed()
 
@@ -982,12 +994,13 @@ def test_fsm_fail_on_end():
     state_one = StateOne()
     fsm_.add_state(STATE_ONE, state_one, initial=True)
 
-    agent = make_connected_agent()
-    agent.start(auto_register=False)
+    agent = MockedAgentFactory()
+    future = agent.start(auto_register=False)
+    future.result()
 
     agent.add_behaviour(fsm_)
 
-    wait_for_behaviour_is_killed(fsm_)
+    fsm_.join()
 
     assert fsm_.is_killed()
 
@@ -998,3 +1011,199 @@ def test_fsm_fail_on_end():
 
 def test_to_graphviz(fsm):
     assert fsm.to_graphviz() == "digraph finite_state_machine { rankdir=LR; node [fixedsize=true];STATE_ONE -> STATE_TWO;STATE_TWO -> STATE_THREE;}"
+
+
+def test_join():
+    class WaitBehav(OneShotBehaviour):
+        async def run(self):
+            for i in range(100):
+                self.agent.i = i
+                await asyncio.sleep(0)
+
+    agent = MockedAgentFactory()
+    agent.i = None
+    behaviour = WaitBehav()
+
+    agent.add_behaviour(behaviour)
+    agent.start(auto_register=False)
+
+    behaviour.join(timeout=None)
+
+    assert behaviour.is_done()
+    assert agent.i == 99
+
+    agent.stop()
+
+
+def test_join_with_timeout():
+    class WaitBehav(OneShotBehaviour):
+        async def run(self):
+            await asyncio.sleep(100)
+
+    agent = MockedAgentFactory()
+    agent.i = None
+    behaviour = WaitBehav()
+
+    agent.add_behaviour(behaviour)
+    agent.start(auto_register=False)
+
+    with pytest.raises(TimeoutError):
+        behaviour.join(timeout=0.01)
+
+    assert not behaviour.is_done()
+
+    agent.stop()
+
+
+def test_join_with_long_timeout():
+    class WaitBehav(OneShotBehaviour):
+        async def run(self):
+            await asyncio.sleep(0)
+
+    agent = MockedAgentFactory()
+    agent.i = None
+    behaviour = WaitBehav()
+
+    agent.add_behaviour(behaviour)
+    agent.start(auto_register=False)
+
+    behaviour.join(timeout=100)
+
+    assert behaviour.is_done()
+
+    agent.stop()
+
+
+def test_join_inside_behaviour():
+    class Behav1(OneShotBehaviour):
+        async def run(self):
+            class Behav2(OneShotBehaviour):
+                async def run(self):
+                    self.agent.behav2 = True
+
+            behav2 = Behav2()
+            self.agent.add_behaviour(behav2)
+            await behav2.join()
+            self.agent.behav1 = True
+
+    agent = MockedAgentFactory()
+    agent.behav1 = False
+    agent.behav2 = False
+
+    behav1 = Behav1()
+    agent.add_behaviour(behav1)
+
+    future = agent.start(auto_register=False)
+    future.result()
+
+    behav1.join()
+
+    assert agent.behav1
+    assert agent.behav2
+
+    agent.stop()
+
+
+def test_join_inside_behaviour_with_timeout():
+    class Behav1(OneShotBehaviour):
+        async def run(self):
+            class Behav2(OneShotBehaviour):
+                async def run(self):
+                    await asyncio.sleep(1)
+
+            behav2 = Behav2()
+            self.agent.add_behaviour(behav2)
+            with pytest.raises(TimeoutError):
+                await behav2.join(timeout=0.001)
+            self.agent.behav1 = True
+
+    agent = MockedAgentFactory()
+    agent.behav1 = False
+
+    behav1 = Behav1()
+    agent.add_behaviour(behav1)
+
+    future = agent.start(auto_register=False)
+    future.result()
+
+    behav1.join()
+
+    assert agent.behav1
+
+    agent.stop()
+
+
+def test_behaviour_at_end():
+    class FinalBehav(OneShotBehaviour):
+        async def run(self):
+            self.agent.value = 2000
+
+    class StopAgent(Agent):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._async_connect = CoroutineMock()
+            self._async_register = CoroutineMock()
+            self.conn_coro = Mock()
+            self.conn_coro.__aexit__ = CoroutineMock()
+            self.stream = Mock()
+            self.value = 1000
+
+        def stop(self):
+            behav = FinalBehav()
+            self.add_behaviour(behav)
+            behav.join()
+            return super().stop()
+
+    agent = StopAgent("fakejid@fakeserver", "fakepassword")
+
+    future = agent.start(auto_register=False)
+    future.result()
+
+    assert agent.value == 1000
+    future = agent.stop()
+    future.result()
+    assert agent.value == 2000
+
+
+def test_two_behaviours_at_end():
+    class FinalBehav2(OneShotBehaviour):
+        async def run(self):
+            self.agent.value = 2000
+
+    class FinalBehav1(OneShotBehaviour):
+        async def run(self):
+            behav = FinalBehav2()
+            self.agent.add_behaviour(behav)
+            await behav.join()
+
+    class StopAgent(Agent):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._async_connect = CoroutineMock()
+            self._async_register = CoroutineMock()
+            self.conn_coro = Mock()
+            self.conn_coro.__aexit__ = CoroutineMock()
+            self.stream = Mock()
+            self.value = 1000
+
+        def stop(self):
+            behav = FinalBehav1()
+            self.add_behaviour(behav)
+            behav.join()
+            return super().stop()
+
+    agent = StopAgent("fakejid@fakeserver", "fakepassword")
+
+    future = agent.start(auto_register=False)
+    future.result()
+
+    assert agent.value == 1000
+    future = agent.stop()
+    future.result()
+    assert agent.value == 2000
+
+
+def test_get_state(fsm):
+    assert isinstance(fsm.get_state(STATE_ONE), StateOne)
+    assert isinstance(fsm.get_state(STATE_TWO), StateTwo)
+    assert isinstance(fsm.get_state(STATE_THREE), StateThree)

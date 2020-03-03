@@ -2,11 +2,12 @@ import datetime
 import logging
 import socket
 
-import timeago
-from aiohttp import web as aioweb
 import aiohttp_jinja2
 import jinja2
+import timeago
+from aiohttp import web as aioweb
 from aioxmpp import PresenceType, JID
+
 from spade.message import Message
 
 logger = logging.getLogger("spade.Web")
@@ -19,18 +20,19 @@ def unused_port(hostname):
         return s.getsockname()[1]
 
 
-async def start_server_in_aiothread(handler, hostname, port, agent):
+async def start_server_in_loop(runner, hostname, port, agent):
     """
     Listens to http requests and sends them to the webapp.
 
     Args:
-        handler: handler to process the http requests
+        runner: AppRunner to process the http requests
         hostname: host name to listen from.
         port: port to listen from.
         agent: agent that owns the web app.
     """
-    loop = agent.aiothread.loop
-    agent.web.server = await loop.create_server(handler, hostname, port)
+    await runner.setup()
+    agent.web.server = aioweb.TCPSite(runner, hostname, port)
+    await agent.web.server.start()
     logger.info(f"Serving on http://{hostname}:{port}/")
 
 
@@ -39,11 +41,10 @@ class WebApp(object):
 
     def __init__(self, agent):
         self.agent = agent
-        self.app = None
-        self.handler = None
         self.server = None
         self.hostname = None
         self.port = None
+        self.runner = None
         self.app = aioweb.Application()
         internal_loader = jinja2.PackageLoader("spade", package_path='templates', encoding='utf-8')
         cwd_loader = jinja2.FileSystemLoader(".")
@@ -69,8 +70,11 @@ class WebApp(object):
             self.loaders.insert(0, jinja2.FileSystemLoader(templates_path))
             self._set_loaders()
         self.setup_routes()
-        self.handler = self.app.make_handler()
-        self.agent.submit(start_server_in_aiothread(self.handler, self.hostname, self.port, self.agent))
+        self.runner = aioweb.AppRunner(self.app)
+        return self.agent.submit(start_server_in_loop(self.runner, self.hostname, self.port, self.agent))
+
+    def is_started(self):
+        return self.runner is not None
 
     def _set_loaders(self):
         loader = jinja2.ChoiceLoader(self.loaders)
@@ -173,8 +177,8 @@ class WebApp(object):
 
     async def stop_now(self, request):
         logger.warning("Stopping agent from web interface.")
-        self.agent.stop()
-        return aioweb.json_response({})
+        await self.agent.stop()
+        return aioweb.json_response({})  # pragma: no cover
 
     @aiohttp_jinja2.template("internal_tpl_messages.html")
     async def get_messages(self, request):

@@ -1,12 +1,13 @@
-import time
 import getpass
+import time
 
+from spade import quit_spade
 from spade.agent import Agent
 from spade.behaviour import OneShotBehaviour
 
 
 class Agent1(Agent):
-    def setup(self):
+    async def setup(self):
         print("Agent {} running".format(self.name))
         self.add_behaviour(self.Behav1())
 
@@ -32,7 +33,7 @@ class Agent1(Agent):
 
 
 class Agent2(Agent):
-    def setup(self):
+    async def setup(self):
         print("Agent {} running".format(self.name))
         self.add_behaviour(self.Behav2())
 
@@ -78,3 +79,4 @@ if __name__ == "__main__":
             break
     agent1.stop()
     agent2.stop()
+    quit_spade()

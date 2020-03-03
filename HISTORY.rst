@@ -2,6 +2,45 @@
 History
 =======
 
+3.1.4 (2019-11-04)
+------------------
+
+* Fixed issue with third party versions.
+* Use factories in tests.
+* Updated documentation and examples.
+* Minor bug fixing.
+
+
+3.1.3 (2019-07-18)
+------------------
+
+* Added BDI plugin (https://github.com/javipalanca/spade_bdi).
+* Improved the platform stop (quit_spade).
+* Minor bug fixing.
+
+3.1.2 (2019-05-14)
+------------------
+
+* Hotfix docs.
+
+3.1.1 (2019-05-14)
+------------------
+
+* Added Python 3.7 support.
+* Added Code of Conduct.
+* Minor bugs fixed.
+
+3.1.0 (2019-03-22)
+------------------
+
+* Agents now run in a single event loop managed by the container.
+* Behaviors can be waited for using the "join" method.
+* To check if a behaviours is done you can now use the "is_done" method.
+* The "setup" method is now a coroutine.
+* New "quit_spade" helper to stop the whole process.
+* The "start" and "stop" methods change depending on the context, since it is the container who will properly start or stop the agent.
+  They return a coroutine or a future depending on whether they are called from a coroutine or a synchronous method.
+
 3.0.9 (2018-10-24)
 ------------------
 
