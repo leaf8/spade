@@ -4,6 +4,7 @@ from aioxmpp import PresenceState, PresenceShow
 
 class ContactNotFound(Exception):
     """ """
+
     pass
 
 
@@ -91,15 +92,15 @@ class PresenceManager(object):
         """
         return self.state.available
 
-    def set_available(self, show=None):
+    def set_available(self, show=PresenceShow.NONE):
         """
         Sets the agent availability to True.
 
         Args:
-          show (aioxmpp.PresenceShow, optional): the show state of the presence (Default value = None)
+          show (aioxmpp.PresenceShow, optional): the show state of the presence (Default value = PresenceShow.NONE)
 
         """
-        show = self.state.show if show is None else show
+        show = self.state.show if show is PresenceShow.NONE else show
         self.set_presence(PresenceState(available=True, show=show))
 
     def set_unavailable(self):
@@ -235,8 +236,10 @@ class PresenceManager(object):
         """ """
         if self.approve_all:
             self.client.stream.enqueue(
-                aioxmpp.Presence(type_=aioxmpp.structs.PresenceType.UNSUBSCRIBED,
-                                 to=stanza.from_.bare())
+                aioxmpp.Presence(
+                    type_=aioxmpp.structs.PresenceType.UNSUBSCRIBED,
+                    to=stanza.from_.bare(),
+                )
             )
         else:
             self.on_unsubscribe(str(stanza.from_))
