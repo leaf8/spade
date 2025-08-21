@@ -20,6 +20,14 @@ spade.behaviour module
    :undoc-members:
    :show-inheritance:
 
+spade.cli module
+----------------
+
+.. automodule:: spade.cli
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 spade.container module
 ----------------------
 
@@ -64,6 +72,14 @@ spade.web module
 ----------------
 
 .. automodule:: spade.web
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+spade.xmpp\_client module
+-------------------------
+
+.. automodule:: spade.xmpp_client
    :members:
    :undoc-members:
    :show-inheritance:
